@@ -330,11 +330,37 @@ function sessionDates(course){
   }
   return out;
 }
-const GRADE_BANDS = [
+/* ===== เกณฑ์ตัดเกรด (ปรับได้เอง — เก็บแยกรายผู้ใช้ ไม่กระทบข้อมูลวิชา) =====
+   ค่าเริ่มต้น: เกณฑ์มาตรฐาน 8 ระดับ A–F  ·  อาจารย์แต่ละมหาวิทยาลัยแก้ได้ที่เมนู จัดการวิชา */
+const GRADE_DEFAULT = [
   [80,'A','#2e7d4a'],[75,'B+','#4f9a3f'],[70,'B','#6fae3a'],
   [65,'C+','#c79a12'],[60,'C','#d98a1a'],[55,'D+','#d96a1f'],
   [50,'D','#c8542a'],[0,'F','#b23b2b']
 ];
+const GB_KEY = 'osnbu:gradebands';
+const GRADE_BANDS = GRADE_DEFAULT.map(b=>[...b]);   // อาร์เรย์ทำงานจริง (แก้ในที่ได้)
+function normalizeBands(){
+  GRADE_BANDS.sort((a,b)=>b[0]-a[0]);                // เรียงจากสูงไปต่ำเสมอ
+  if(GRADE_BANDS.length) GRADE_BANDS[GRADE_BANDS.length-1][0]=0;   // ระดับต่ำสุดต้องเริ่มที่ 0
+}
+function setBands(arr){
+  GRADE_BANDS.length=0;
+  arr.forEach(b=>GRADE_BANDS.push([+b[0]||0, String(b[1]||'?'), String(b[2]||'#8a8a8a')]));
+  normalizeBands();
+}
+function loadGradeBands(){
+  try{ const raw=localStorage.getItem(GB_KEY);
+    if(raw){ const a=JSON.parse(raw); if(Array.isArray(a)&&a.length>=2) setBands(a); }
+  }catch(e){}
+}
+function saveGradeBands(){ try{ localStorage.setItem(GB_KEY, JSON.stringify(GRADE_BANDS)); }catch(e){} }
+function isCustomBands(){ try{ return !!localStorage.getItem(GB_KEY); }catch(e){ return false; } }
+loadGradeBands();
+function bandRangeText(i){
+  const b=GRADE_BANDS[i];
+  const hi = i===0 ? 100 : GRADE_BANDS[i-1][0];
+  return i===0 ? `${b[0]} – 100` : (i===GRADE_BANDS.length-1 ? `ต่ำกว่า ${hi}` : `${b[0]} – ${(hi-0.01).toFixed(2)}`);
+}
 function gradeOf(p){for(const b of GRADE_BANDS){if(p>=b[0])return b;}return GRADE_BANDS.at(-1);}
 
 let CUR = {};        // per-course working cache: {courseKey:data}
@@ -940,6 +966,29 @@ async function pageManage(){
       </div>
     </div></div>`;
 
+  // ----- เกณฑ์ตัดเกรด -----
+  h+=`<div class="card" style="margin-top:16px"><h2><span class="ic">🎓</span>เกณฑ์ตัดเกรด
+      <span style="font-weight:400;font-size:13px;color:var(--ink2)">(อิงเกณฑ์ · ปรับตามข้อบังคับของมหาวิทยาลัยท่านได้ · มีผลกับทุกวิชา)</span></h2>
+    <div style="overflow:auto"><table class="tbl" style="max-width:560px">
+      <thead><tr><th style="width:90px">เกรด</th><th class="num" style="width:130px">คะแนนขั้นต่ำ (%)</th><th style="width:150px">ช่วงคะแนน</th><th style="width:70px">สี</th><th style="width:60px"></th></tr></thead><tbody>
+      ${GRADE_BANDS.map((b,i)=>`<tr>
+        <td><input class="inp" style="width:74px;text-align:center;font-weight:600" id="gb_n_${i}" value="${String(b[1]).replace(/"/g,'&quot;')}"></td>
+        <td class="num"><input class="inp" type="number" min="0" max="100" step="0.5" style="width:88px" id="gb_m_${i}" value="${b[0]}" ${i===GRADE_BANDS.length-1?'disabled title="ระดับต่ำสุดต้องเริ่มที่ 0 เสมอ"':''}></td>
+        <td style="color:var(--ink2);font-size:13px">${bandRangeText(i)}</td>
+        <td><input type="color" id="gb_c_${i}" value="${b[2]}" style="width:46px;height:32px;padding:2px;border:1.5px solid var(--line);border-radius:8px;background:#fff;cursor:pointer"></td>
+        <td>${GRADE_BANDS.length>2 && i!==GRADE_BANDS.length-1 ? `<button class="btn btn-sm" style="background:var(--red-l);color:var(--red)" data-gbdel="${i}" title="ลบระดับนี้">✕</button>` : ''}</td>
+      </tr>`).join('')}
+    </tbody></table></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn btn-pri btn-sm" id="gbSave">💾 บันทึกเกณฑ์</button>
+      <button class="btn btn-gh btn-sm" id="gbAdd">+ เพิ่มระดับ</button>
+      <button class="btn btn-gh btn-sm" id="gbReset">คืนค่าเริ่มต้น (A–F 8 ระดับ)</button>
+      <span class="crumb" style="align-self:center">${isCustomBands()?'⚙️ ใช้เกณฑ์ที่ท่านตั้งเอง':'ใช้เกณฑ์มาตรฐาน'}</span>
+    </div>
+    <div style="font-size:12px;color:var(--ink2);margin-top:8px;line-height:1.6">
+      ระบบเรียงลำดับจากคะแนนสูงไปต่ำให้อัตโนมัติ · ระดับต่ำสุด (เกรดตก) จะถูกตรึงไว้ที่ 0 เสมอ · เกณฑ์นี้ติดไปกับไฟล์สำรองข้อมูลด้วย
+    </div></div>`;
+
   // ----- รายการวิชา -----
   h+=`<div class="card"><h2><span class="ic">🗂️</span>รายวิชาในระบบ (${COURSES.length})</h2>`;
   if(!COURSES.length){
@@ -1047,6 +1096,38 @@ async function pageManage(){
   $('#attCfgReset').onclick=()=>{
     ATT_CFG={...ATT_DEFAULT}; saveAttCfg(); toast('คืนค่าเกณฑ์เริ่มต้นแล้ว'); go('manage');
   };
+
+  // เกณฑ์ตัดเกรด
+  const gbRead=()=>GRADE_BANDS.map((b,i)=>{
+    const nm=$('#gb_n_'+i), mn=$('#gb_m_'+i), cl=$('#gb_c_'+i);
+    return [ mn&&!mn.disabled ? (parseFloat(mn.value)||0) : b[0],
+             nm ? (nm.value.trim()||b[1]) : b[1],
+             cl ? cl.value : b[2] ];
+  });
+  const gbApply=(arr,msg)=>{
+    if(arr.length<2){ toast('ต้องมีอย่างน้อย 2 ระดับ'); return; }
+    const names=arr.map(x=>x[1]);
+    if(new Set(names).size!==names.length){ toast('ชื่อเกรดซ้ำกัน กรุณาแก้ไข'); return; }
+    setBands(arr); saveGradeBands(); toast(msg); go('manage');
+  };
+  const gbS=$('#gbSave'); if(gbS) gbS.onclick=()=>gbApply(gbRead(),'บันทึกเกณฑ์ตัดเกรดแล้ว');
+  const gbA=$('#gbAdd');  if(gbA) gbA.onclick=()=>{
+    const cur=gbRead(); const lowest=cur[cur.length-1];
+    const above=cur.length>1?cur[cur.length-2][0]:60;
+    cur.splice(cur.length-1,0,[Math.max(1,Math.round(above/2)),'ใหม่'+cur.length,'#8a8a8a']);
+    gbApply(cur,'เพิ่มระดับแล้ว — กรุณาตั้งชื่อและคะแนน');
+  };
+  const gbR=$('#gbReset'); if(gbR) gbR.onclick=()=>{
+    if(!confirm('คืนค่าเกณฑ์ตัดเกรดเป็นมาตรฐาน A–F 8 ระดับ?')) return;
+    setBands(GRADE_DEFAULT.map(b=>[...b]));
+    try{ localStorage.removeItem(GB_KEY); }catch(e){}
+    toast('คืนค่าเกณฑ์เริ่มต้นแล้ว'); go('manage');
+  };
+  document.querySelectorAll('[data-gbdel]').forEach(b=>b.onclick=()=>{
+    const cur=gbRead(); const i=+b.dataset.gbdel;
+    if(cur.length<=2){ toast('ต้องมีอย่างน้อย 2 ระดับ'); return; }
+    cur.splice(i,1); gbApply(cur,'ลบระดับแล้ว');
+  });
 
   // live preview count
   const upd=()=>{const n=parseRoster($('#mRoster').value).length; $('#rCount').textContent='พบ '+n+' รายชื่อ';};
@@ -1165,7 +1246,13 @@ async function pageGrade(){
   const dist={}; rows.forEach(r=>dist[r.g[1]]=(dist[r.g[1]]||0)+1);
   const distHtml=GRADE_BANDS.map(b=>dist[b[1]]?`<span><i style="background:${b[2]}"></i>${b[1]}: ${dist[b[1]]}</span>`:'').filter(Boolean).join('');
 
+  const critHtml=GRADE_BANDS.map((b,i)=>`<span><i style="background:${b[2]}"></i><b>${b[1]}</b> ${bandRangeText(i)}</span>`).join('');
   h+=`<div class="card" style="margin-top:16px"><h2><span class="ic">🎓</span>ผลการตัดเกรด · ${c.code} หมู่${c.section}</h2>
+    <div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+      <div style="font-size:12.5px;color:var(--ink2);font-weight:600;margin-bottom:6px">เกณฑ์ตัดเกรด (อิงเกณฑ์)
+        <a href="#" class="no-print" onclick="go('manage');return false" style="color:var(--orange);font-weight:400;margin-left:6px">ปรับเกณฑ์</a></div>
+      <div class="legend" style="margin:0">${critHtml}</div>
+    </div>
     <div class="legend" style="margin:0 0 12px">${distHtml||'<span class="crumb">ยังไม่มีข้อมูลคะแนน</span>'}</div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th class="no">ที่</th><th>ชื่อ - นามสกุล</th>
       <th class="num">เช็กชื่อ<br><span style="font-size:11px;font-weight:400;color:var(--ink2)">${attMax}</span></th>
@@ -1209,7 +1296,7 @@ function exportCSV(c,rows,d){
 
 /* ---------- DATA / BACKUP (สำรองข้อมูล) ---------- */
 async function exportAll(){
-  const dump={app:'orange-notebook', ver:2, date:new Date().toISOString(), profile:PROFILE, attCfg:ATT_CFG, courses:COURSES, data:{}};
+  const dump={app:'orange-notebook', ver:2, date:new Date().toISOString(), profile:PROFILE, attCfg:ATT_CFG, gradeBands:GRADE_BANDS, courses:COURSES, data:{}};
   for(const c of COURSES){ dump.data[c.key]=await loadCourse(c.key); }
   const blob=new Blob([JSON.stringify(dump)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
@@ -1227,6 +1314,7 @@ async function importAll(file, mode){
       // ----- โหมดแทนที่ทั้งหมด (เหมือนกู้คืนเครื่องใหม่) -----
       if(obj.profile){ PROFILE={...PROFILE, ...obj.profile}; await saveProfile(); applyProfileFooter(); }
       if(obj.attCfg){ ATT_CFG={...ATT_DEFAULT, ...obj.attCfg}; saveAttCfg(); }
+      if(Array.isArray(obj.gradeBands) && obj.gradeBands.length>=2){ setBands(obj.gradeBands); saveGradeBands(); }
       if(incomingCourses.length){ COURSES=incomingCourses; await saveCourseList(); }
       if(obj.data) for(const k of Object.keys(obj.data)){ CUR[k]=obj.data[k]; await saveCourse(k); }
       if(!activeCourse && COURSES.length) activeCourse=COURSES[0].key;
@@ -1240,6 +1328,7 @@ async function importAll(file, mode){
       PROFILE={...PROFILE, ...p}; await saveProfile(); applyProfileFooter();
     }
     if(obj.attCfg && !localStorage.getItem(ATT_KEY)){ ATT_CFG={...ATT_DEFAULT, ...obj.attCfg}; saveAttCfg(); }
+    if(Array.isArray(obj.gradeBands) && obj.gradeBands.length>=2 && !isCustomBands()){ setBands(obj.gradeBands); saveGradeBands(); }
 
     const existKeys=new Set(COURSES.map(c=>c.key));
     const existSig =new Set(COURSES.map(c=>(c.code||'')+'|'+(c.section||'')));
