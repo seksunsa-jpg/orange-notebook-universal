@@ -12,7 +12,7 @@
 /* PWA: ลงทะเบียน service worker แบบ inline เพื่อให้ติดตั้งเป็นแอปและเปิดออฟไลน์ได้ */
 if('serviceWorker' in navigator){
   const swCode = `
-    const C='osnb-universal-v1';
+    const C='osnb-universal-v2';
     self.addEventListener('install',e=>{self.skipWaiting();});
     self.addEventListener('activate',e=>{e.waitUntil(self.clients.claim());});
     self.addEventListener('fetch',e=>{
@@ -858,14 +858,90 @@ async function pageActivity(){
 }
 
 /* ---------- EXAM SCORES ---------- */
+/* ===== ตัวช่วยนำเข้าคะแนนจาก Google Form / Google Sheets ===== */
+function impDigits(x){ return String(x==null?'':x).replace(/[^0-9]/g,''); }
+
+/* แยกข้อความที่วางมา -> {rows:[{id,score,raw}], bad:[บรรทัดที่จับคู่ไม่ได้]} */
+function impParse(text, students){
+  const map={};                                   // เลขล้วนของรหัส -> รหัสจริงในระบบ
+  students.forEach(s=>{ const k=impDigits(s.id); if(k) map[k]=s.id; });
+  const rows=[], bad=[];
+  String(text||'').split(/\r?\n/).forEach(line=>{
+    if(!line.trim()) return;
+    let cells = line.indexOf('\t')>=0 ? line.split('\t') : line.split(/\s*,\s*|\s{2,}/);
+    cells = cells.map(x=>String(x).trim());
+    /* 1) หาช่องที่เป็น "รหัสนักศึกษา" โดยเทียบกับรายชื่อในวิชานี้ */
+    let sid=null, idIdx=-1;
+    for(let i=0;i<cells.length;i++){ const k=impDigits(cells[i]); if(k && map[k]){ sid=map[k]; idIdx=i; break; } }
+    if(!sid){ bad.push(line.trim()); return; }
+    /* 2) หาช่องคะแนน — รองรับรูปแบบ "27 / 30" ที่ Google Form ตรวจให้อัตโนมัติ */
+    let sc=null;
+    for(let i=0;i<cells.length;i++){
+      if(i===idIdx) continue;
+      const m=cells[i].match(/^(\d+(?:[.,]\d+)?)\s*\/\s*\d+(?:[.,]\d+)?$/);
+      if(m){ sc=parseFloat(m[1].replace(',','.')); break; }
+    }
+    if(sc==null){
+      for(let i=cells.length-1;i>=0;i--){
+        if(i===idIdx) continue;
+        if(/^\d+(?:[.,]\d+)?$/.test(cells[i])){ sc=parseFloat(cells[i].replace(',','.')); break; }
+      }
+    }
+    if(sc==null){ bad.push(line.trim()); return; }
+    rows.push({id:sid, score:sc, raw:line.trim()});
+  });
+  return {rows, bad};
+}
+
+/* ยุบกรณีนักศึกษาส่งซ้ำหลายครั้ง */
+function impDedupe(rows, mode){
+  const m={};
+  rows.forEach(r=>{
+    if(!(r.id in m)) m[r.id]=r.score;
+    else if(mode==='max') m[r.id]=Math.max(m[r.id], r.score);
+    else m[r.id]=r.score;                          // 'last' = ครั้งล่าสุดทับของเดิม
+  });
+  return m;
+}
+
+let impResult=null;   // เก็บผลตรวจสอบไว้ให้ปุ่ม "ยืนยันนำเข้า" ใช้
+
 async function pageExam(){
   if(!ensureCourse()){ $('#view').innerHTML=header('')+noCourseView(); return; }
   const c=byKey(activeCourse); const d=await loadCourse(activeCourse);
+  impResult=null;
   let h=header(courseSelect('selEx',()=>go('exam')));
   h+=`<div class="card"><div class="row">
     <div><label class="fld">คะแนนเต็ม สอบกลางภาค</label><input class="inp" id="exMid" value="${d.examMax.mid}"></div>
     <div><label class="fld">คะแนนเต็ม สอบปลายภาค</label><input class="inp" id="exFin" value="${d.examMax.fin}"></div>
-    <button class="btn btn-gh btn-sm" id="saveEx" style="margin-bottom:1px">💾 บันทึกคะแนนสอบ</button></div>
+    <button class="btn btn-gh btn-sm" id="saveEx" style="margin-bottom:1px">💾 บันทึกคะแนนสอบ</button>
+    <button class="btn btn-gh btn-sm" id="btnImp" style="margin-bottom:1px">📥 นำเข้าคะแนนจาก Google Form</button></div>
+
+  <div id="impBox" class="no-print" style="display:none;border:1.5px dashed var(--line);border-radius:12px;padding:14px;margin-bottom:16px;background:#FFFDF9">
+    <div style="font-weight:600;margin-bottom:4px">📥 นำเข้าคะแนนจาก Google Form / Google Sheets</div>
+    <div style="font-size:12.5px;color:var(--ink2);line-height:1.6;margin-bottom:10px">
+      เปิดชีตคำตอบของฟอร์ม → ลากคลุมเฉพาะ <strong>คอลัมน์รหัสนักศึกษาและคอลัมน์คะแนน</strong> (ไม่ต้องเอาหัวตาราง) → กด Ctrl+C → มาวางในช่องล่างนี้<br>
+      ระบบจะหาคอลัมน์รหัสนักศึกษาให้เอง วางทั้งแถวก็ได้ และรองรับคะแนนรูปแบบ <code>27 / 30</code> ของ Google Form
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <div><label class="fld">ลงช่อง</label>
+        <select class="inp" id="impTarget" style="width:120px"><option value="mid">กลางภาค</option><option value="fin">ปลายภาค</option></select></div>
+      <div><label class="fld">คะแนนเต็มในฟอร์ม</label><input class="inp" id="impFrom" value="${d.examMax.mid}"></div>
+      <div><label class="fld">แปลงเป็นเต็ม</label><input class="inp" id="impTo" value="${d.examMax.mid}"></div>
+      <div><label class="fld">ถ้าส่งซ้ำหลายครั้ง</label>
+        <select class="inp" id="impDup" style="width:130px"><option value="last">ใช้ครั้งล่าสุด</option><option value="max">ใช้คะแนนสูงสุด</option></select></div>
+      <div><label class="fld">คนที่ไม่ได้ส่ง</label>
+        <select class="inp" id="impMiss" style="width:130px"><option value="keep">คงค่าเดิมไว้</option><option value="zero">ให้ 0 คะแนน</option></select></div>
+    </div>
+    <textarea id="impText" placeholder="วางข้อมูลที่คัดลอกมาตรงนี้&#10;ตัวอย่าง&#10;65041520101	27&#10;65041520102	24 / 30" style="width:100%;min-height:130px;font-family:'Sarabun';font-size:13.5px;border:1.5px solid var(--line);border-radius:10px;padding:10px;background:#fff"></textarea>
+    <div class="row" style="margin:10px 0 0">
+      <button class="btn btn-gh btn-sm" id="impCheck" style="margin-bottom:1px">🔍 ตรวจสอบก่อน</button>
+      <button class="btn btn-sm" id="impGo" style="margin-bottom:1px;background:var(--orange);color:#fff;display:none">✅ ยืนยันนำเข้า</button>
+      <button class="btn btn-gh btn-sm" id="impCancel" style="margin-bottom:1px">ปิด</button>
+    </div>
+    <div id="impOut" style="margin-top:10px"></div>
+  </div>
+
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th class="no">ที่</th><th>ชื่อ - นามสกุล</th>
       <th class="num">กลางภาค<br><span style="font-size:11px;font-weight:400;color:var(--ink2)">เต็ม ${d.examMax.mid}</span></th>
       <th class="num">ปลายภาค<br><span style="font-size:11px;font-weight:400;color:var(--ink2)">เต็ม ${d.examMax.fin}</span></th></tr></thead><tbody>`;
@@ -882,6 +958,60 @@ async function pageExam(){
     const sid=inp.dataset.sid,k=inp.dataset.k,mx=+inp.dataset.max;
     let v=inp.value===''?'':Math.min(+inp.value||0,mx); if(v!==''&&+inp.value>mx)inp.value=v;
     if(!d.exams[sid])d.exams[sid]={}; d.exams[sid][k]=v;});
+
+  /* ---------- ปุ่ม/ตรรกะของกล่องนำเข้า ---------- */
+  $('#btnImp').onclick=()=>{ const b=$('#impBox'); b.style.display = b.style.display==='none' ? 'block':'none';
+    if(b.style.display==='block') $('#impText').focus(); };
+  $('#impCancel').onclick=()=>{ $('#impBox').style.display='none'; };
+  $('#impTarget').onchange=e=>{ const mx=d.examMax[e.target.value]||0; $('#impFrom').value=mx; $('#impTo').value=mx; };
+
+  $('#impCheck').onclick=()=>{
+    const target=$('#impTarget').value;
+    const from=+$('#impFrom').value||0, to=+$('#impTo').value||0;
+    if(from<=0||to<=0){ toast('กรุณากรอกคะแนนเต็มให้ถูกต้อง'); return; }
+    const colMax=+d.examMax[target]||0;
+    const {rows,bad}=impParse($('#impText').value, c.students);
+    if(!rows.length){ $('#impOut').innerHTML=`<div style="color:var(--red);font-size:13px">❌ จับคู่รหัสนักศึกษาไม่ได้เลย — ตรวจว่าได้คัดลอกคอลัมน์รหัสนักศึกษามาด้วย และรหัสตรงกับรายชื่อในวิชานี้</div>`;
+      $('#impGo').style.display='none'; impResult=null; return; }
+    const raw=impDedupe(rows,$('#impDup').value);
+    const scaled={}; let over=0;
+    Object.keys(raw).forEach(sid=>{
+      let v=raw[sid]/from*to;
+      v=Math.round(v*100)/100;
+      if(colMax>0&&v>colMax){ over++; v=colMax; }
+      scaled[sid]=v;
+    });
+    const got=Object.keys(scaled);
+    const missing=c.students.filter(s=>!(s.id in scaled));
+    impResult={target, scaled, missCount:missing.length};
+    const nameOf=id=>{const s=c.students.find(x=>x.id===id); return s?s.name:id;};
+    let o=`<div style="font-size:13.5px;line-height:1.8">
+      ✅ จับคู่ได้ <strong>${got.length}</strong> คน จากทั้งหมด <strong>${c.students.length}</strong> คน<br>
+      ${missing.length?`⚠️ ยังไม่มีคะแนน <strong>${missing.length}</strong> คน: <span style="color:var(--ink2)">${missing.map(s=>s.name).join(', ')}</span><br>`:''}
+      ${bad.length?`⚠️ จับคู่ไม่ได้ <strong>${bad.length}</strong> บรรทัด (มักเป็นหัวตาราง หรือรหัสไม่ตรงรายชื่อ):<br><span style="color:var(--ink2);font-size:12px">${bad.slice(0,10).map(x=>x.replace(/</g,'&lt;')).join('<br>')}${bad.length>10?'<br>…':''}</span><br>`:''}
+      ${over?`⚠️ มี <strong>${over}</strong> คน คะแนนเกินเต็มของช่อง (${colMax}) ระบบตัดลงเหลือเท่าคะแนนเต็ม<br>`:''}
+      ${from!==to?`🔄 แปลงคะแนน: ดิบเต็ม ${from} → เก็บเต็ม ${to} (คูณ ${(to/from).toFixed(4)})<br>`:''}
+    </div>
+    <div class="tbl-wrap" style="max-height:260px;overflow:auto;margin-top:8px"><table class="tbl"><thead><tr><th>ชื่อ - นามสกุล</th><th class="num">ดิบ</th><th class="num">จะบันทึก</th></tr></thead><tbody>`;
+    got.forEach(sid=>{ o+=`<tr><td>${nameOf(sid)}<br><span class="sid">${sid}</span></td><td class="num">${raw[sid]}</td><td class="num"><strong>${scaled[sid]}</strong></td></tr>`; });
+    o+=`</tbody></table></div>`;
+    $('#impOut').innerHTML=o;
+    $('#impGo').style.display='inline-flex';
+  };
+
+  $('#impGo').onclick=async()=>{
+    if(!impResult){ toast('กด "ตรวจสอบก่อน" ก่อนนะครับ'); return; }
+    const {target,scaled}=impResult;
+    const zero = $('#impMiss').value==='zero';
+    let n=0;
+    c.students.forEach(s=>{
+      if(s.id in scaled){ if(!d.exams[s.id])d.exams[s.id]={}; d.exams[s.id][target]=scaled[s.id]; n++; }
+      else if(zero){ if(!d.exams[s.id])d.exams[s.id]={}; d.exams[s.id][target]=0; }
+    });
+    await saveCourse(activeCourse);
+    toast('นำเข้าคะแนนแล้ว '+n+' คน');
+    impResult=null; go('exam');
+  };
 }
 
 /* ==================== จัดการวิชา (MANAGE COURSES) ==================== */
