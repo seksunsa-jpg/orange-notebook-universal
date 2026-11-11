@@ -12,7 +12,7 @@
 /* PWA: ลงทะเบียน service worker แบบ inline เพื่อให้ติดตั้งเป็นแอปและเปิดออฟไลน์ได้ */
 if('serviceWorker' in navigator){
   const swCode = `
-    const C='osnb-universal-v2';
+    const C='osnb-universal-v3';
     self.addEventListener('install',e=>{self.skipWaiting();});
     self.addEventListener('activate',e=>{e.waitUntil(self.clients.claim());});
     self.addEventListener('fetch',e=>{
@@ -320,9 +320,18 @@ const SYM2ST = {}; Object.entries(STATUS).forEach(([k,v])=>{SYM2ST[v.sym]=k;});
 function thShort(iso){const d=new Date(iso+'T00:00');return d.getDate()+'/'+(d.getMonth()+1);}
 // สร้างวันเช็คชื่อรายสัปดาห์ตามวันเรียนของวิชา
 function isoLocal(d){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),da=String(d.getDate()).padStart(2,"0");return `${y}-${m}-${da}`;}
+function validISO(x){ return typeof x==='string' && /^\d{4}-\d{2}-\d{2}$/.test(x); }
+function courseStart(course){                       // วันเปิดภาคของวิชา (ISO)
+  if(course && validISO(course.semStart)) return course.semStart;
+  if(typeof PROFILE!=='undefined' && validISO(PROFILE.semStart)) return PROFILE.semStart;
+  return SEM_START;
+}
+function mondayOf(iso){ const d=new Date(iso+'T00:00'); const k=(d.getDay()+6)%7; d.setDate(d.getDate()-k); return d; }
+function thDateLong(iso){ const m=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  const d=new Date(iso+'T00:00'); return d.getDate()+' '+m[d.getMonth()]+' '+(d.getFullYear()+543); }
 function sessionDates(course){
   const wd = DAY_NUM[course.day]; if(wd===undefined) return [];
-  const mon = new Date(SEM_START+'T00:00');           // จันทร์สัปดาห์ที่ 1
+  const mon = mondayOf(courseStart(course));           // จันทร์สัปดาห์ที่ 1
   const out=[];
   for(let w=0; w<TOTAL_WEEKS; w++){
     const dt=new Date(mon); dt.setDate(mon.getDate()+w*7+(wd-1));
@@ -408,7 +417,7 @@ async function loadCourseList(){
 async function saveCourseList(){
   // store only metadata + students (attendance/scores live under STK+key)
   const list = COURSES.map(c=>({key:c.key,code:c.code,title:c.title,section:c.section,
-    sem:c.sem||'1/2569',credit:c.credit||'',room:c.room||'',day:c.day||'',time:c.time||'',
+    sem:c.sem||'1/2569',semStart:c.semStart||'',credit:c.credit||'',room:c.room||'',day:c.day||'',time:c.time||'',
     students:c.students||[]}));
   try{ await Store.set(CL_KEY, JSON.stringify(list)); }
   catch(e){ toast('บันทึกรายการวิชาไม่สำเร็จ'); }
@@ -421,6 +430,7 @@ let PROFILE = {
   faculty:'',
   university:'มหาวิทยาลัยราชภัฏอุดรธานี',
   term:'1/2569',
+  semStart:'',  // วันเปิดภาค (สัปดาห์ที่ 1) ค่าเริ่มต้นของวิชาที่เพิ่มใหม่
   logoUni:'',   // โลโก้มหาวิทยาลัย (base64) — อัปโหลดเองที่หน้า จัดการวิชา
   logoFac:'',   // โลโก้คณะ (base64)
   logoProg:''   // โลโก้สาขา (base64)
@@ -766,7 +776,7 @@ async function pageAttend(){
 
   // scoring criteria legend
   h+=`<div class="legend" style="margin:0 0 12px;gap:16px">
-    ${Object.values(STATUS).map(s=>`<span><b style="font-family:'Mitr';color:var(--ink)">${s.sym}</b> ${s.th} <span style="color:var(--orange-d);font-weight:600">${s.score} คะแนน</span></span>`).join('')}
+    ${Object.entries(STATUS).map(([k,s])=>`<span><b style="font-family:'Mitr';color:var(--ink)">${s.sym}</b> ${s.th} <span style="color:var(--orange-d);font-weight:600">${stScore(k)} คะแนน</span></span>`).join('')}
     <span style="color:var(--ink2)">· เกณฑ์: ${Object.keys(STATUS).map(k=>STATUS[k].sym+'='+stScore(k)).join(' ')} · เต็ม/ครั้ง ${maxPerSession()} คะแนน <a href="#" onclick="go('manage');return false" style="color:var(--orange)">ปรับเกณฑ์</a></span></div></div>`;
 
   const rec=d.attendance[attDate]||{};
@@ -784,7 +794,7 @@ async function pageAttend(){
   c.students.forEach((s,i)=>{
     const cur=rec[s.id]||'';
     const a=attScore(d,s.id,100);
-    const stBtns=Object.entries(STATUS).map(([k,v])=>`<button class="st s-${v.c} ${cur===k?'on':''}" data-sid="${s.id}" data-st="${k}" title="${v.th} (${v.score})">${v.sym}</button>`).join('');
+    const stBtns=Object.entries(STATUS).map(([k,v])=>`<button class="st s-${v.c} ${cur===k?'on':''}" data-sid="${s.id}" data-st="${k}" title="${v.th} (${stScore(k)})">${v.sym}</button>`).join('');
     h+=`<tr><td class="no">${i+1}</td><td class="sid">${s.id}</td><td>${s.name}</td>
       <td style="text-align:center" class="no-print"><div class="st-group">${stBtns}</div></td>
       <td class="print-only" style="text-align:center;font-family:'Mitr'">${cur?STATUS[cur].sym:''}</td>
@@ -1063,6 +1073,7 @@ async function pageManage(){
     <div class="row">
       <div style="flex:1;min-width:220px"><label class="fld">ชื่อ-ตำแหน่งผู้สอน</label><input class="inp wide" id="pTeacher" style="width:100%" value="${(PROFILE.teacher||'').replace(/"/g,'&quot;')}" placeholder="เช่น ผศ.ดร.ชื่อ สกุล"></div>
       <div><label class="fld">ภาคเรียน</label><input class="inp" id="pTerm" style="width:110px" value="${(PROFILE.term||'').replace(/"/g,'&quot;')}" placeholder="1/2569"></div>
+      <div><label class="fld">วันเปิดภาค (สัปดาห์ที่ 1)</label><input type="date" class="inp" id="pSemStart" style="width:160px" value="${PROFILE.semStart||''}"></div>
     </div>
     <div class="row">
       <div style="flex:1;min-width:200px"><label class="fld">สาขาวิชา</label><input class="inp wide" id="pProgram" style="width:100%" value="${(PROFILE.program||'').replace(/"/g,'&quot;')}"></div>
@@ -1150,6 +1161,7 @@ async function pageManage(){
     </div>
     <div class="row">
       <div><label class="fld">วันเรียน</label><select id="mDay" class="sel" style="min-width:140px">${dayOpts}</select></div>
+      <div><label class="fld">วันเปิดภาค (สัปดาห์ที่ 1)</label><input type="date" class="inp" id="mStart" style="width:160px" value="${ed?courseStart(ed):(PROFILE.semStart||'')}"></div>
       <div><label class="fld">เวลา</label><input class="inp" id="mTime" style="width:130px" value="${v('time')}" placeholder="08:00-12:00"></div>
       <div><label class="fld">ห้อง</label><input class="inp" id="mRoom" style="width:110px" value="${v('room')}" placeholder="334"></div>
       <div><label class="fld">หน่วยกิต</label><input class="inp" id="mCredit" style="width:100px" value="${v('credit','3(2-2-5)')}"></div>
@@ -1175,7 +1187,16 @@ async function pageManage(){
   // profile save
   $('#pSave').onclick=async()=>{
     PROFILE.teacher=$('#pTeacher').value.trim()||PROFILE.teacher;
+    const oldTerm=PROFILE.term, oldStart=courseStart(null);
     PROFILE.term=$('#pTerm').value.trim()||PROFILE.term;
+    const ns=$('#pSemStart').value;
+    if(validISO(ns) && ns!==PROFILE.semStart){
+      // วิชาของภาคเรียนอื่นที่ยังไม่มีวันเปิดภาคของตัวเอง → ล็อกวันเดิมไว้ กันวันที่เช็คชื่อเลื่อน
+      let locked=0;
+      COURSES.forEach(c=>{ if(!validISO(c.semStart) && (c.sem||'')!==PROFILE.term){ c.semStart=oldStart; locked++; } });
+      PROFILE.semStart=ns;
+      if(locked) await saveCourseList();
+    }
     PROFILE.program=$('#pProgram').value.trim();
     PROFILE.faculty=$('#pFaculty').value.trim();
     PROFILE.university=$('#pUni').value.trim();
@@ -1277,7 +1298,7 @@ async function mgSave(){
   if(newKey!==mgEditKey && byKey(newKey)){ toast('มีวิชา '+code+' หมู่'+section+' อยู่แล้ว'); return; }
   const students=parseRoster($('#mRoster').value);
   const obj={key:newKey, code, section, title,
-    sem:PROFILE.term||'1/2569', credit:$('#mCredit').value.trim()||'3(2-2-5)',
+    sem:PROFILE.term||'1/2569', semStart:(validISO($('#mStart').value)?$('#mStart').value:(PROFILE.semStart||'')), credit:$('#mCredit').value.trim()||'3(2-2-5)',
     room:$('#mRoom').value.trim(), day:$('#mDay').value, time:$('#mTime').value.trim(),
     students};
   if(mgEditKey){
