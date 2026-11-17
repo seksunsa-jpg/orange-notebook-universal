@@ -12,7 +12,7 @@
 /* PWA: ลงทะเบียน service worker แบบ inline เพื่อให้ติดตั้งเป็นแอปและเปิดออฟไลน์ได้ */
 if('serviceWorker' in navigator){
   const swCode = `
-    const C='osnb-universal-v3';
+    const C='osnb-universal-v4';
     self.addEventListener('install',e=>{self.skipWaiting();});
     self.addEventListener('activate',e=>{e.waitUntil(self.clients.claim());});
     self.addEventListener('fetch',e=>{
@@ -525,27 +525,24 @@ async function saveSheetUrl(u){
 /* แปลงข้อมูลวิชา -> ตาราง 2 มิติ (อ่านได้/แก้ได้ในชีต) */
 function buildMatrix(c,d){
   const sess=sessionDates(c);
+  const interim=+d.interim||0, fin=+d.final||0, attMax=+d.attMax||0;
   const head=['ลำดับ','รหัสนักศึกษา','ชื่อ-นามสกุล'];
   sess.forEach(s=>head.push('W'+s.week+' '+thShort(s.iso)));
   d.activities.forEach(a=>head.push('กิจ:'+a.name+'|'+a.max));
-  head.push('กลางภาค|'+d.examMax.mid, 'ปลายภาค|'+d.examMax.fin, 'มาเรียนดิบ', 'รวม', 'เกรด');
-  const wsum=d.weights.att+d.weights.act+d.weights.mid+d.weights.fin;
+  // ห้ามตั้งชื่อคอลัมน์สรุปขึ้นต้นด้วย W / กิจ: / กลางภาค / ปลายภาค (parseMatrix ใช้คำขึ้นต้นหาคอลัมน์ข้อมูลดิบ)
+  head.push('กลางภาค|'+d.examMax.mid, 'ปลายภาค|'+d.examMax.fin, 'มาเรียนดิบ|'+d.attBase,
+    'คะแนนเช็กชื่อ|'+attMax, 'คะแนนกิจกรรม (เทียบสัดส่วน)', 'คะแนนสอบกลางภาค (เทียบสัดส่วน)',
+    'รวมระหว่างภาค|'+interim, 'คะแนนสอบปลายภาค|'+fin, 'รวม|'+(interim+fin), 'เกรด');
+  const gr=gradeRows(c,d);
   const rows=[head];
   c.students.forEach((st,i)=>{
-    const a=attScore(d,st.id,d.weights.att);
-    const attW=d.attBase>0?+(a.points/d.attBase*d.weights.att).toFixed(2):0;
-    const at=actTotal(d,st.id);
-    const actW=at.max>0?+(at.got/at.max*d.weights.act).toFixed(2):0;
-    const e=d.exams[st.id]||{};
-    const midW=(d.examMax.mid>0&&e.mid!=null&&e.mid!=='')?+(+e.mid/d.examMax.mid*d.weights.mid).toFixed(2):0;
-    const finW=(d.examMax.fin>0&&e.fin!=null&&e.fin!=='')?+(+e.fin/d.examMax.fin*d.weights.fin).toFixed(2):0;
-    const total=+(attW+actW+midW+finW).toFixed(2);
-    const g=gradeOf(wsum>0?total/wsum*100:0)[1];
+    const r=gr[i];
     const row=[i+1, st.id, st.name];
-    sess.forEach(s=>{const r=d.attendance[s.iso]; row.push(r&&r[st.id]?STATUS[r[st.id]].sym:'');});
+    sess.forEach(s=>{const x=d.attendance[s.iso]; row.push(x&&x[st.id]?STATUS[x[st.id]].sym:'');});
     const sc=d.actScores[st.id]||{};
     d.activities.forEach(a2=>row.push(sc[a2.id]??''));
-    row.push(e.mid??'', e.fin??'', a.points, total, g);
+    const e=d.exams[st.id]||{};
+    row.push(e.mid??'', e.fin??'', r.attPts, r.attPart, r.actPart, r.midPart, r.interimScore, r.finPart, r.total, r.g[1]);
     rows.push(row);
   });
   const w=Math.max(...rows.map(r=>r.length));
@@ -553,7 +550,6 @@ function buildMatrix(c,d){
   return rows;
 }
 
-/* แปลงตารางจากชีต -> ข้อมูลวิชา (รองรับการแก้สัญลักษณ์/คะแนนในชีตแล้วดึงกลับ) */
 function parseMatrix(c,m){
   if(!m||m.length<2) return null;
   const head=m[0].map(x=>String(x));
@@ -1343,6 +1339,35 @@ async function mgClearAll(){
 }
 
 /* ---------- GRADE (ตัดเกรด) ---------- */
+/* ===== สูตรตัดเกรดกลาง (หน้าตัดเกรด + Google Sheets ใช้ร่วมกัน) ===== */
+function gradeRows(c,d){
+  const interim=+d.interim||0, fin=+d.final||0, attMax=+d.attMax||0;
+  const sumIF=interim+fin;
+  const remain=+(interim-attMax).toFixed(2);
+  return c.students.map((s,i)=>{
+    const a=attScore(d,s.id,1);
+    const attPart = d.attBase>0 ? +(a.points/d.attBase*attMax).toFixed(2) : 0;
+    // ก้อนดิบระหว่างภาค = กิจกรรม + สอบกลางภาค
+    const at=actTotal(d,s.id);
+    const e=d.exams[s.id]||{};
+    const midGot = (e.mid!=null && e.mid!=='')? +e.mid : 0;
+    const midMax = (e.mid!=null && e.mid!=='')? (+d.examMax.mid||0) : 0;
+    const poolGot = +(at.got+midGot).toFixed(2);
+    const poolMax = +(at.max+midMax).toFixed(2);
+    const factor = poolMax>0 ? remain/poolMax : 0;           // ตัวคูณเทียบสัดส่วน
+    const actPart = +(at.got*factor).toFixed(2);              // กิจกรรม หลังเทียบ
+    const midPart = +(midGot*factor).toFixed(2);              // กลางภาค หลังเทียบ
+    const poolPart = +(actPart+midPart).toFixed(2);
+    const interimScore = +(attPart+poolPart).toFixed(2);
+    const finGot = (e.fin!=null && e.fin!=='')? +e.fin : null;
+    const finPart = (d.examMax.fin>0 && finGot!=null)? +(finGot/d.examMax.fin*fin).toFixed(2) : 0;
+    const total=+(interimScore+finPart).toFixed(2);
+    const pct = sumIF>0? total/sumIF*100 : total;
+    const g=gradeOf(pct);
+    return {i:i+1,s,attPts:a.points,attPart,actGot:at.got,actMax:at.max,actPart,midGot,midMax,midPart,poolGot,poolMax,poolPart,interimScore,finGot,finPart,total,pct,g};
+  });
+}
+
 async function pageGrade(){
   if(!ensureCourse()){ $('#view').innerHTML=header('')+noCourseView(); return; }
   const c=byKey(activeCourse); const d=await loadCourse(activeCourse);
@@ -1371,29 +1396,8 @@ async function pageGrade(){
       ${remain<0?'<br><span class="pill p-late">⚠️ เช็กชื่อมากกว่าระหว่างภาค กรุณาปรับ</span>':''}
     </div></div>`;
 
-  // ---- คำนวณรายคน ----
-  const rows=c.students.map((s,i)=>{
-    const a=attScore(d,s.id,1);
-    const attPart = d.attBase>0 ? +(a.points/d.attBase*attMax).toFixed(2) : 0;
-    // ก้อนดิบระหว่างภาค = กิจกรรม + สอบกลางภาค
-    const at=actTotal(d,s.id);
-    const e=d.exams[s.id]||{};
-    const midGot = (e.mid!=null && e.mid!=='')? +e.mid : 0;
-    const midMax = (e.mid!=null && e.mid!=='')? (+d.examMax.mid||0) : 0;
-    const poolGot = +(at.got+midGot).toFixed(2);
-    const poolMax = +(at.max+midMax).toFixed(2);
-    const factor = poolMax>0 ? remain/poolMax : 0;           // ตัวคูณเทียบสัดส่วน
-    const actPart = +(at.got*factor).toFixed(2);              // กิจกรรม หลังเทียบ
-    const midPart = +(midGot*factor).toFixed(2);              // กลางภาค หลังเทียบ
-    const poolPart = +(actPart+midPart).toFixed(2);
-    const interimScore = +(attPart+poolPart).toFixed(2);
-    const finGot = (e.fin!=null && e.fin!=='')? +e.fin : null;
-    const finPart = (d.examMax.fin>0 && finGot!=null)? +(finGot/d.examMax.fin*fin).toFixed(2) : 0;
-    const total=+(interimScore+finPart).toFixed(2);
-    const pct = sumIF>0? total/sumIF*100 : total;
-    const g=gradeOf(pct);
-    return {i:i+1,s,attPts:a.points,attPart,actGot:at.got,actMax:at.max,actPart,midGot,midMax,midPart,poolGot,poolMax,poolPart,interimScore,finGot,finPart,total,pct,g};
-  });
+  // ---- คำนวณรายคน (ใช้สูตรกลาง gradeRows — ตัวเดียวกับที่ส่งขึ้น Google Sheets) ----
+  const rows=gradeRows(c,d);
   const dist={}; rows.forEach(r=>dist[r.g[1]]=(dist[r.g[1]]||0)+1);
   const distHtml=GRADE_BANDS.map(b=>dist[b[1]]?`<span><i style="background:${b[2]}"></i>${b[1]}: ${dist[b[1]]}</span>`:'').filter(Boolean).join('');
 
