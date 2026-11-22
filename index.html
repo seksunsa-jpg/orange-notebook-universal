@@ -12,7 +12,7 @@
 /* PWA: ลงทะเบียน service worker แบบ inline เพื่อให้ติดตั้งเป็นแอปและเปิดออฟไลน์ได้ */
 if('serviceWorker' in navigator){
   const swCode = `
-    const C='osnb-universal-v4';
+    const C='osnb-universal-v5';
     self.addEventListener('install',e=>{self.skipWaiting();});
     self.addEventListener('activate',e=>{e.waitUntil(self.clients.claim());});
     self.addEventListener('fetch',e=>{
@@ -231,6 +231,19 @@ label.fld{font-size:12.5px;color:var(--ink2);font-weight:600;display:block;margi
   .two-col{grid-template-columns:1fr}
   .sched{font-size:10px}.sched .cls{font-size:9px}
 }
+/* v5: ติดตามงาน/ค้างส่ง */
+.sub-chip{display:inline-block;margin-top:4px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:2px 8px;font-size:11px;line-height:1.5;cursor:pointer;white-space:nowrap;font-family:'Sarabun',sans-serif}
+.sub-chip.c-green{background:var(--green-l);color:var(--green);border-color:#BFDCC8}
+.sub-chip.c-blue{background:#DCEBF3;color:var(--blue);border-color:#B9D5E3}
+.sub-chip.c-amber{background:var(--amber-l);color:#9A6608;border-color:#EBCB86}
+.sub-chip.c-red{background:var(--red-l);color:var(--red);border-color:#E9B6AA}
+.sub-chip.c-gray{color:var(--ink2)}
+.sub-chip.c-none{color:#B49A84;border-style:dashed}
+.due-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;background:var(--paper);border:1px solid var(--line);border-radius:10px;margin-bottom:7px;cursor:pointer}
+.due-tag{font-size:11.5px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.donut{width:150px;height:150px;border-radius:50%;position:relative;flex:none}
+.donut::after{content:'';position:absolute;inset:26px;background:#fff;border-radius:50%}
+.donut-c{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;font-family:'Mitr',sans-serif}
 </style>
 <div class="app">
   <aside class="side">
@@ -464,6 +477,7 @@ async function loadCourse(key){
     if(data.final==null)   data.final   = 30;
     if(data.attMax==null)  data.attMax  = 10;
   }catch(e){}
+  if(!data.submitted) data.submitted = {};   // v5: วันที่รับงาน {sid:{aid:'YYYY-MM-DD'}}
   CUR[key] = data; return data;
 }
 async function saveCourse(key){
@@ -496,6 +510,30 @@ function actTotal(d, sid){
   d.activities.forEach(a=>{max+=(+a.max||0); got+=(+sc[a.id]||0);});
   return {got:+got.toFixed(2), max:+max.toFixed(2)};
 }
+
+/* ---- v5: ติดตามงาน / ค้างส่ง (อ่านอย่างเดียว ไม่เกี่ยวกับสูตรตัดเกรด) ---- */
+const SUB_ST={
+  done:{th:'ส่งแล้ว',ic:'✓',c:'green'}, wait:{th:'ส่งแล้ว รอตรวจ',ic:'📥',c:'blue'},
+  late:{th:'ส่งช้า',ic:'⏰',c:'amber'}, over:{th:'ค้างส่ง',ic:'✕',c:'red'}, pending:{th:'ยังไม่ถึงกำหนด',ic:'…',c:'gray'}
+};
+function subMark(d,sid,aid){ return ((d.submitted||{})[sid]||{})[aid]||''; }
+function subStatus(d,sid,a,today){
+  today=today||todayISO();
+  const v=(d.actScores[sid]||{})[a.id];
+  const scored = v!==''&&v!=null&&(+v)>0;          // คะแนน 0 ที่ไม่ได้ติ๊กรับงาน = ยังไม่ส่ง
+  const mk=subMark(d,sid,a.id);
+  if(mk) return (a.due&&mk>a.due)?'late':(scored||(v!==''&&v!=null)?'done':'wait');
+  if(scored) return 'done';
+  if(!a.due) return null;                           // ไม่ได้ตั้งกำหนดส่ง = ไม่ติดตาม
+  return today>a.due?'over':'pending';
+}
+function overCount(d,sid,today){ let n=0; d.activities.forEach(a=>{ if(subStatus(d,sid,a,today)==='over') n++; }); return n; }
+function actSubStats(c,d,a,today){
+  const r={done:0,wait:0,late:0,over:0,pending:0,none:0};
+  c.students.forEach(s=>{ const st=subStatus(d,s.id,a,today); r[st||'none']++; });
+  r.sent=r.done+r.wait+r.late; return r;
+}
+function dayDiff(a,b){ return Math.round((new Date(a+'T00:00')-new Date(b+'T00:00'))/86400000); }
 
 /* ---- course selector ---- */
 function courseSelect(id, onchange){
@@ -532,7 +570,7 @@ function buildMatrix(c,d){
   // ห้ามตั้งชื่อคอลัมน์สรุปขึ้นต้นด้วย W / กิจ: / กลางภาค / ปลายภาค (parseMatrix ใช้คำขึ้นต้นหาคอลัมน์ข้อมูลดิบ)
   head.push('กลางภาค|'+d.examMax.mid, 'ปลายภาค|'+d.examMax.fin, 'มาเรียนดิบ|'+d.attBase,
     'คะแนนเช็กชื่อ|'+attMax, 'คะแนนกิจกรรม (เทียบสัดส่วน)', 'คะแนนสอบกลางภาค (เทียบสัดส่วน)',
-    'รวมระหว่างภาค|'+interim, 'คะแนนสอบปลายภาค|'+fin, 'รวม|'+(interim+fin), 'เกรด');
+    'รวมระหว่างภาค|'+interim, 'คะแนนสอบปลายภาค|'+fin, 'รวม|'+(interim+fin), 'เกรด', 'งานค้างส่ง');
   const gr=gradeRows(c,d);
   const rows=[head];
   c.students.forEach((st,i)=>{
@@ -542,7 +580,7 @@ function buildMatrix(c,d){
     const sc=d.actScores[st.id]||{};
     d.activities.forEach(a2=>row.push(sc[a2.id]??''));
     const e=d.exams[st.id]||{};
-    row.push(e.mid??'', e.fin??'', r.attPts, r.attPart, r.actPart, r.midPart, r.interimScore, r.finPart, r.total, r.g[1]);
+    row.push(e.mid??'', e.fin??'', r.attPts, r.attPart, r.actPart, r.midPart, r.interimScore, r.finPart, r.total, r.g[1], overCount(d,st.id));
     rows.push(row);
   });
   const w=Math.max(...rows.map(r=>r.length));
@@ -565,7 +603,14 @@ function parseMatrix(c,m){
   });
   const base=CUR[c.key]||{attendance:{},activities:[],actScores:{},exams:{},examMax:{mid:30,fin:30},weights:{...DEFAULT_W},attBase:TOTAL_WEEKS*maxPerSession()};
   const d={...base, attendance:{}, actScores:{}, exams:{}};
-  d.activities=actCols.map((a,i)=>({id:'a'+i+'_'+(Date.now()%100000),name:a.name,max:a.max}));
+  // v5: จับคู่กิจกรรมเดิมตามชื่อ เพื่อคงรหัสกิจกรรม วันกำหนดส่ง และการติ๊กรับงานไว้
+  const usedA=new Set();
+  d.activities=actCols.map((a,i)=>{
+    const old=(base.activities||[]).find(o=>o.name===a.name&&!usedA.has(o.id));
+    if(old){ usedA.add(old.id); return {...old,max:a.max}; }
+    return {id:'a'+i+'_'+(Date.now()%100000),name:a.name,max:a.max};
+  });
+  d.submitted=base.submitted||{};
   if(midMax!=null)d.examMax.mid=midMax; if(finMax!=null)d.examMax.fin=finMax;
   for(let r=1;r<m.length;r++){
     const sid=String(m[r][1]||'').trim(); if(!sid) continue;
@@ -702,7 +747,50 @@ async function pageDashboard(){
       <td class="num">${c.students.length}</td><td class="num">${dts}</td>
       <td class="num">${pct===null?'—':pct+'%'}</td></tr>`;}
   html += `</tbody></table></div></div></div>`;
+  html += await dashWorkCard();
   $('#view').innerHTML = html;
+}
+
+/* v5: การ์ดงานใกล้กำหนดส่ง + สัดส่วนการส่งงาน */
+async function dashWorkCard(){
+  const today=todayISO(); const items=[]; const tot={done:0,wait:0,late:0,over:0,pending:0}; const owe=[];
+  for(const c of COURSES){ const d=await loadCourse(c.key);
+    d.activities.filter(a=>a.due).forEach(a=>{ const ss=actSubStats(c,d,a,today);
+      Object.keys(tot).forEach(k=>tot[k]+=ss[k]);
+      const dd=dayDiff(a.due,today);
+      if((dd>=0&&dd<=7)||(dd<0&&ss.over>0)) items.push({c,a,ss,dd}); });
+    c.students.forEach(s=>{ const n=overCount(d,s.id,today); if(n) owe.push({c,s,n}); });
+  }
+  const all=tot.done+tot.wait+tot.late+tot.over+tot.pending;
+  let h=`<div class="two-col"><div class="card"><h2><span class="ic">⏳</span>งานใกล้กำหนดส่ง / ค้างส่ง</h2>`;
+  if(!all){
+    h+=`<div class="empty"><div class="big">🗓️</div>ยังไม่มีงานที่ตั้งกำหนดส่ง<br><span style="font-size:12.5px">ใส่ "กำหนดส่ง" ให้กิจกรรมได้ที่หน้า <a href="#" onclick="go('activity');return false" style="color:var(--orange)">⭐ คะแนนกิจกรรม</a></span></div></div></div>`;
+    return h;
+  }
+  items.sort((x,y)=>x.dd-y.dd);
+  if(!items.length) h+=`<div class="empty"><div class="big">✅</div>ไม่มีงานครบกำหนดใน 7 วันนี้ และไม่มีงานค้างส่ง</div>`;
+  h+=items.slice(0,12).map(({c,a,ss,dd})=>{
+    const tag= dd<0?`<span class="due-tag" style="background:var(--red-l);color:var(--red)">เลยกำหนด ${-dd} วัน</span>`
+      : dd===0?`<span class="due-tag" style="background:var(--amber-l);color:#9A6608">ส่งวันนี้</span>`
+      : `<span class="due-tag" style="background:var(--green-l);color:var(--green)">อีก ${dd} วัน</span>`;
+    return `<div class="due-row" onclick="activeCourse='${c.key}';go('activity')">
+      <div><strong>${a.name}</strong> · ${c.code} ม.${c.section}<br><span style="font-size:12px;color:var(--ink2)">กำหนดส่ง ${thDate(a.due)} · ส่งแล้ว ${ss.sent}/${c.students.length}${ss.over?` · <b style="color:var(--red)">ค้าง ${ss.over}</b>`:''}</span></div>${tag}</div>`;}).join('');
+  h+=`</div><div class="card"><h2><span class="ic">📊</span>สัดส่วนการส่งงาน</h2>`;
+  const seg=[['done','var(--green)'],['wait','var(--blue)'],['late','var(--amber)'],['over','var(--red)'],['pending','#D9C7B2']];
+  let acc=0; const stops=seg.map(([k,col])=>{const a0=acc/all*360; acc+=tot[k]; return `${col} ${a0}deg ${acc/all*360}deg`;}).join(',');
+  const sentPct=Math.round((tot.done+tot.wait+tot.late)/all*100);
+  h+=`<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+    <div class="donut" style="background:conic-gradient(${stops})"><div class="donut-c"><div style="font-size:26px;font-weight:600">${sentPct}%</div><div style="font-size:11px;color:var(--ink2)">ส่งแล้ว</div></div></div>
+    <div class="legend" style="flex-direction:column;align-items:flex-start;gap:5px;margin:0">
+      ${seg.map(([k,col])=>`<span><i style="background:${col}"></i>${SUB_ST[k].th} ${tot[k]}</span>`).join('')}
+      <span style="color:var(--ink2);font-size:11.5px">นับเฉพาะงานที่ตั้งกำหนดส่ง (นักศึกษา × งาน)</span></div></div>`;
+  if(owe.length){
+    owe.sort((x,y)=>y.n-x.n);
+    h+=`<div style="margin-top:14px;font-weight:600;font-size:13.5px">ค้างส่งมากที่สุด</div><div class="tbl-wrap" style="max-height:230px"><table class="tbl"><tbody>`+
+      owe.slice(0,10).map(o=>`<tr style="cursor:pointer" onclick="activeCourse='${o.c.key}';go('students')"><td>${o.s.name}<br><span class="sid">${o.s.id}</span> · <span style="font-size:11.5px;color:var(--ink2)">${o.c.code} ม.${o.c.section}</span></td><td class="num"><strong style="color:var(--red)">${o.n}</strong> งาน</td></tr>`).join('')+`</tbody></table></div>`;
+  }
+  h+=`</div></div>`;
+  return h;
 }
 
 /* ---------- SCHEDULE ---------- */
@@ -730,14 +818,17 @@ function pageSchedule(){
 }
 
 /* ---------- STUDENTS ---------- */
-function pageStudents(){
+async function pageStudents(){
   if(!ensureCourse()){ $('#view').innerHTML=header('')+noCourseView(); return; }
-  const c=byKey(activeCourse);
+  const c=byKey(activeCourse); const d=await loadCourse(activeCourse); const today=todayISO();
+  const tracked=d.activities.filter(a=>a.due);
   let h=header(courseSelect('selStud',()=>go('students'))+printBtn());
   h+=printHead('รายชื่อนักศึกษา', `${c.code} หมู่ ${c.section} · ${c.title} · จำนวน ${c.students.length} คน`);
   h+=`<div class="card"><h2 class="no-print"><span class="ic">👥</span>${c.code} หมู่${c.section} · ${c.title} <span style="font-weight:400;color:var(--ink2);font-size:14px;margin-left:6px">${c.students.length} คน</span></h2>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th class="no">ที่</th><th>รหัสนักศึกษา</th><th>ชื่อ - นามสกุล</th><th class="print-only" style="width:90px">ลายเซ็น</th></tr></thead><tbody>`;
-  c.students.forEach((s,i)=>h+=`<tr><td class="no">${i+1}</td><td class="sid">${s.id}</td><td>${s.name}</td><td class="print-only"></td></tr>`);
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th class="no">ที่</th><th>รหัสนักศึกษา</th><th>ชื่อ - นามสกุล</th>${tracked.length?'<th class="num no-print">งานค้างส่ง</th>':''}<th class="print-only" style="width:90px">ลายเซ็น</th></tr></thead><tbody>`;
+  c.students.forEach((s,i)=>{ const oc=overCount(d,s.id,today);
+    const names=d.activities.filter(a=>subStatus(d,s.id,a,today)==='over').map(a=>a.name).join(', ');
+    h+=`<tr><td class="no">${i+1}</td><td class="sid">${s.id}</td><td>${s.name}</td>${tracked.length?`<td class="num no-print" title="${names}">${oc?`<strong style="color:var(--red)">${oc}</strong><br><span style="font-size:11px;color:var(--ink2)">${names}</span>`:'<span style="color:var(--green)">ครบ</span>'}</td>`:''}<td class="print-only"></td></tr>`;});
   h+=`</tbody></table></div></div>`;
   $('#view').innerHTML=h;
 }
@@ -836,31 +927,59 @@ async function pageActivity(){
     return;
   }
   h+=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="no">ที่</th><th>ชื่อ - นามสกุล</th>`;
-  d.activities.forEach(a=>h+=`<th class="num" style="min-width:96px"><input class="inp wide" style="width:84px;font-size:12px;font-weight:600" value="${a.name}" data-aid="${a.id}" data-f="name"><br><span style="font-size:11px;color:var(--ink2)">เต็ม <input class="inp" style="width:46px;padding:3px" value="${a.max}" data-aid="${a.id}" data-f="max"> <button class="del-act" data-aid="${a.id}" style="border:0;background:none;cursor:pointer;color:var(--red)">✕</button></span></th>`);
-  h+=`<th class="num">รวม</th></tr></thead><tbody>`;
+  const today=todayISO();
+  d.activities.forEach(a=>{ const ss=actSubStats(c,d,a,today);
+    h+=`<th class="num" style="min-width:128px"><input class="inp wide" style="width:112px;font-size:12px;font-weight:600" value="${a.name}" data-aid="${a.id}" data-f="name"><br><span style="font-size:11px;color:var(--ink2)">เต็ม <input class="inp" style="width:46px;padding:3px" value="${a.max}" data-aid="${a.id}" data-f="max"> <button class="del-act" data-aid="${a.id}" style="border:0;background:none;cursor:pointer;color:var(--red)">✕</button></span>
+      <br><span style="font-size:11px;color:var(--ink2)">กำหนดส่ง</span> <input type="date" class="inp" style="width:120px;padding:3px;font-size:11.5px" value="${a.due||''}" data-aid="${a.id}" data-f="due">
+      <br><span style="font-size:11px;font-weight:400">${a.due?`ส่งแล้ว ${ss.sent}/${c.students.length}${ss.over?` · <span style="color:var(--red);font-weight:600">ค้าง ${ss.over}</span>`:''}`:'<span style="color:#B49A84">ยังไม่ติดตาม</span>'}</span></th>`;});
+  h+=`<th class="num">รวม</th><th class="num">ค้างส่ง</th></tr></thead><tbody>`;
   c.students.forEach((s,i)=>{
     const sc=d.actScores[s.id]||{}; const t=actTotal(d,s.id);
     h+=`<tr><td class="no">${i+1}</td><td>${s.name}<br><span class="sid">${s.id}</span></td>`;
-    d.activities.forEach(a=>h+=`<td class="num"><input class="inp" value="${sc[a.id]??''}" data-sid="${s.id}" data-aid="${a.id}" data-max="${a.max}"></td>`);
-    h+=`<td class="num"><strong id="acttot-${s.id}">${t.got}</strong>/${t.max}</td></tr>`;
+    d.activities.forEach(a=>h+=`<td class="num"><input class="inp" value="${sc[a.id]??''}" data-sid="${s.id}" data-aid="${a.id}" data-max="${a.max}"><br>${subChip(d,s.id,a,today)}</td>`);
+    const oc=overCount(d,s.id,today);
+    h+=`<td class="num"><strong id="acttot-${s.id}">${t.got}</strong>/${t.max}</td><td class="num" id="over-${s.id}">${oc?`<strong style="color:var(--red)">${oc}</strong>`:'—'}</td></tr>`;
   });
-  h+=`</tbody></table></div></div>`;
+  h+=`</tbody></table></div>
+    <div class="legend no-print" style="margin:10px 0 0;gap:12px;font-size:12px">${Object.values(SUB_ST).map(x=>`<span class="sub-chip c-${x.c}" style="cursor:default">${x.ic} ${x.th}</span>`).join('')}
+      <span style="color:var(--ink2)">แตะป้ายใต้ช่องคะแนนเพื่อบันทึกว่า "รับงานวันนี้" · แตะซ้ำเพื่อยกเลิก · กรอกคะแนนมากกว่า 0 ถือว่าส่งแล้วอัตโนมัติ</span></div></div>`;
   $('#view').innerHTML=h;
 
+  const actTbl=document.querySelector('#view .tbl');
+  if(actTbl) actTbl.onclick=async(ev)=>{
+    const b=ev.target.closest('.sub-chip[data-sid]'); if(!b) return;
+    const sid=b.dataset.sid, aid=b.dataset.aid;
+    if(!d.submitted[sid]) d.submitted[sid]={};
+    if(d.submitted[sid][aid]){ delete d.submitted[sid][aid]; toast('ยกเลิกการรับงานแล้ว'); }
+    else { d.submitted[sid][aid]=todayISO(); toast('บันทึกรับงานวันที่ '+thDate(todayISO())); }
+    await saveCourse(activeCourse); go('activity');
+  };
   $('#addAct').onclick=()=>{d.activities.push({id:'a'+Date.now(),name:'กิจกรรมที่ '+(d.activities.length+1),max:10});go('activity');};
   $('#saveAct').onclick=async()=>{await saveCourse(activeCourse);toast('บันทึกคะแนนกิจกรรมแล้ว');};
   document.querySelectorAll('.del-act').forEach(b=>b.onclick=()=>{
     d.activities=d.activities.filter(a=>a.id!==b.dataset.aid);
-    Object.values(d.actScores).forEach(o=>delete o[b.dataset.aid]); go('activity');});
+    Object.values(d.actScores).forEach(o=>delete o[b.dataset.aid]);
+    Object.values(d.submitted||{}).forEach(o=>delete o[b.dataset.aid]); go('activity');});
   document.querySelectorAll('[data-f]').forEach(inp=>inp.onchange=()=>{
     const a=d.activities.find(x=>x.id===inp.dataset.aid);
-    a[inp.dataset.f]= inp.dataset.f==='max'?(+inp.value||0):inp.value; go('activity');});
+    a[inp.dataset.f]= inp.dataset.f==='max'?(+inp.value||0):inp.value;
+    if(inp.dataset.f==='due'){ saveCourse(activeCourse); toast(inp.value?'ตั้งกำหนดส่ง '+thDate(inp.value):'ยกเลิกกำหนดส่งแล้ว'); }
+    go('activity');});
   document.querySelectorAll('input[data-aid][data-sid]').forEach(inp=>inp.oninput=()=>{
     const sid=inp.dataset.sid,aid=inp.dataset.aid,mx=+inp.dataset.max;
     let v=inp.value===''?'':Math.min(+inp.value||0,mx);
     if(v!==''&&+inp.value>mx)inp.value=v;
     if(!d.actScores[sid])d.actScores[sid]={}; d.actScores[sid][aid]=v;
-    const t=actTotal(d,sid); $('#acttot-'+sid).textContent=t.got;});
+    const t=actTotal(d,sid); $('#acttot-'+sid).textContent=t.got;
+    const a=d.activities.find(x=>x.id===aid); const ch=inp.parentElement.querySelector('.sub-chip');
+    if(a&&ch) ch.outerHTML=subChip(d,sid,a,todayISO());
+    const oc=overCount(d,sid); const oe=$('#over-'+sid); if(oe) oe.innerHTML=oc?`<strong style="color:var(--red)">${oc}</strong>`:'—';});
+}
+function subChip(d,sid,a,today){
+  const st=subStatus(d,sid,a,today); const mk=subMark(d,sid,a.id);
+  if(!st) return `<button class="sub-chip c-none" data-sid="${sid}" data-aid="${a.id}" title="แตะเพื่อบันทึกว่ารับงานวันนี้">＋ รับงาน</button>`;
+  const x=SUB_ST[st];
+  return `<button class="sub-chip c-${x.c}" data-sid="${sid}" data-aid="${a.id}" title="${x.th}${mk?' · รับงาน '+thDate(mk):''}">${x.ic} ${x.th}${mk&&st==='late'?' '+thShort(mk):''}</button>`;
 }
 
 /* ---------- EXAM SCORES ---------- */
